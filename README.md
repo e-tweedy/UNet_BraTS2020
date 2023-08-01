@@ -21,6 +21,9 @@ In order to experiment with the notebook, you need to first acquire the BraTS 20
 * The model predictions are evaluated using two metrics as implemented in [torchmetrics](https://torchmetrics.readthedocs.io/en/latest/):
     * Intersection over Union (IoU) score, implemented as [MultilabelJaccardIndex](https://torchmetrics.readthedocs.io/en/stable/classification/jaccard_index.html)
     * Dice score, implemented as [MultilabelF1Score](https://torchmetrics.readthedocs.io/en/stable/classification/f1_score.html)
+* The model attained the following average metric scores across the validation and testing sets:
+
+<img src="results.png" alt="Evaluation results" width="800"/>
 
 ## Repository contents:
 
