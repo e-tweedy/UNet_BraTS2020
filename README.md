@@ -1,5 +1,7 @@
 # Segmentation of brain tumor regions
 
+**[View presentation slides about this project](https://e-tweedy.github.io/brats_slides.pdf)
+
 **[View the project notebook as a HTML file](https://e-tweedy.github.io/BraTS2020.html)**
 
 In this project, we implement a 3-dimensional UNet image segmentation model in order to predict brain tumor regions from MRI scan data.
