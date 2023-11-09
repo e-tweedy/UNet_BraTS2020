@@ -24,9 +24,11 @@ In order to experiment with the notebook, you need to first acquire the BraTS 20
     * Dice score, implemented as [MultilabelF1Score](https://torchmetrics.readthedocs.io/en/stable/classification/f1_score.html)
 * Summary of the scores on the validation set (20%, 74 samples):
 
-<img src="results.png" alt="Evaluation results" width="800"/>
+<img src="epoch60.png" alt="Evaluation results - validation set" width="800"/>
 
 * Summary of the scores on the testing set (20%, 74 samples):
+
+* <img src="epoch60_test.png" alt="Evaluation results - holdout test set" width="800"/>
 ## Repository contents:
 
 * ``BraTS2020.ipynb`` a Jupyter notebook in which training and evaluation is performed
