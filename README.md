@@ -39,7 +39,8 @@ In order to experiment with the notebook, you need to first acquire the BraTS 20
     * ``image_utils.py`` which contains tools for manipulating and augmenting image samples
     * ``infer.py`` which contains inference and scoring functions
     * ``plot.py`` which contains functions for plotting samples
-    * ``unet'py`` which contains our UNet model class
-* empty directories ``images``, ``masks``, ``test_sample_extreme``, ``trained_model`` for housing saved data as needed
+    * ``train.py`` which contains the training loop
+    * ``unet.py`` which contains our UNet model class
+* empty directories ``images``, ``masks``, ``trained_model`` for housing saved data as needed
 * ``requirements.txt`` file
 * ``BraTS2020.html`` an exported HTML version of the Jupyter notebook
