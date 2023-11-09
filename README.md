@@ -17,16 +17,16 @@ In order to experiment with the notebook, you need to first acquire the BraTS 20
 * The model has a 3-dimensional UNet structure with four encoder levels and four decoder levels, withe group normalization after each convolution layer.
 * Training samples are augmented using random Gaussian noise, random cropping, and random axis flipping in order to discourage overfitting and improve generalization.
 * Segmentation masks are encoded from their original class labels to the more semantically meaningful classes of Enhancing Tumor (ET), Tumor Core (TC), and Whole Tumor (WT).  Note that voxels can have several of these classes, so this is a **multilabel classification problem.**
-* The model is trained for 30 epochs using the [Ranger21 optimizer](https://github.com/lessw2020/Ranger21) and a base learning rate of ``1e-3``.
-* The loss function used during training is [GeneralizedDiceFocalLoss](https://docs.monai.io/en/stable/losses.html#generalizeddicefocalloss) implemented in [monai.losses](https://docs.monai.io/en/stable/losses.html), which is an unweighted sum of the Focal loss and Dice loss.
-* Test-time augmentation is used when making predictions on the validation or testing set: each sample produced four augmented images, and predictions on these augmentations are averaged to produce a final prediction.
-* The model predictions are evaluated using two metrics as implemented in [torchmetrics](https://torchmetrics.readthedocs.io/en/latest/):
-    * Intersection over Union (IoU) score, implemented as [MultilabelJaccardIndex](https://torchmetrics.readthedocs.io/en/stable/classification/jaccard_index.html)
+* The model is trained for 60 epochs using the [Ranger21 optimizer](https://github.com/lessw2020/Ranger21) and a base learning rate of ``3e-3``.
+* The loss function used during training is [DiceFocalLoss](https://docs.monai.io/en/stable/losses.html#dicefocalloss) implemented in [monai.losses](https://docs.monai.io/en/stable/losses.html), which is an unweighted sum of the Focal loss and Dice loss.
+* Test-time augmentation is used when making predictions on the validation or testing set: each sample was chunked into eight overlapping patches, each patch was randomly axis-flipped, and predictions were re-combined with averaging over patch overlaps.
+* The model predictions are evaluated using the following metric in [torchmetrics](https://torchmetrics.readthedocs.io/en/latest/):
     * Dice score, implemented as [MultilabelF1Score](https://torchmetrics.readthedocs.io/en/stable/classification/f1_score.html)
-* The model attained the following average metric scores across the validation and testing sets:
+* Summary of the scores on the validation set (20%, 74 samples):
 
 <img src="results.png" alt="Evaluation results" width="800"/>
 
+* Summary of the scores on the testing set (20%, 74 samples):
 ## Repository contents:
 
 * ``BraTS2020.ipynb`` a Jupyter notebook in which training and evaluation is performed
