@@ -1,8 +1,10 @@
 import torch
 from tqdm.auto import tqdm
 import pickle
+from lib.image_utils import unchunk_image
+import pdb
 
-def evaluate_loop(model, dl, metrics, metric_names, return_sample_scores = False, save_extremes=False):
+def evaluate_loop(model, dl, metrics, metric_names, return_sample_scores = False, save_extremes=False, chunking = True, flipping = True):
     """
     A model evaluation loop
     
@@ -31,6 +33,14 @@ def evaluate_loop(model, dl, metrics, metric_names, return_sample_scores = False
         whether to return individual sample scores
     save_extremes : bool
         whether to save outputs from samples with extreme average dice scores
+    chunking : bool
+        whether to chunk evaluation samples to batch of spatial shape (128,128,128)
+        prior to prediction.
+        If chunking is False, then will maintain their shape and use test-time evaluation
+        methods instead.
+    flipping : bool
+        if chunking, whether to randomly flip spatial dimensions before predicting
+        if chunking is False, this will be ignored
         
     Returns:
     --------
@@ -45,9 +55,11 @@ def evaluate_loop(model, dl, metrics, metric_names, return_sample_scores = False
     
     """
     sample_scores = []
-    for path,image,mask,do_flips in tqdm(dl,leave=False):
+    for image,mask,extra_data,path in tqdm(dl,leave=False):
         path = path[0]
-        outputs = tta_predict(model, image, do_flips)
+        if chunking:
+            outputs = chunk_predict(model, image, extra_data, flipping = flipping)
+        else: outputs = tta_predict(model, image, extra_data)
         sample_score = score(outputs,mask,metrics,metric_names)
         sample_scores.append((path,sample_score))
         if save_extremes:
@@ -57,7 +69,9 @@ def evaluate_loop(model, dl, metrics, metric_names, return_sample_scores = False
                 mask = torch.squeeze(mask).cpu().detach().numpy()
                 outputs = torch.squeeze(outputs).cpu().detach().numpy()
                 sample_to_save = (mask, outputs)
-                with open('test_sample_extreme/'+path.split('.')[0]+'.pkl','wb') as f:
+                prefix = 'test_sample_extreme'
+                if chunking: prefix+='_chunk'
+                with open(prefix+'/'+path.split('.')[0]+'.pkl','wb') as f:
                     pickle.dump(sample_to_save,f)
     scores = {}
     for key in sample_scores[0][1]:
@@ -68,6 +82,19 @@ def evaluate_loop(model, dl, metrics, metric_names, return_sample_scores = False
     if return_sample_scores:
         return scores, sample_scores
     return scores
+
+def chunk_predict(model, image, extra_data, flipping = False):
+    if flipping: do_flips, overlaps = extra_data
+    else: overlaps = extra_data
+    image = image[0]
+    outputs = model(image)
+    if flipping:
+        for idx in range(outputs.shape[0]):
+            for axis in range(len(do_flips[idx])):
+                unflip = torch.flip(outputs[idx],dims = (axis+1,)) if do_flips[idx][axis] else outputs[idx]
+                outputs[idx] = unflip
+    outputs = unchunk_image(outputs,overlaps)
+    return outputs
 
 def tta_predict(model, image, do_flips):
     """
@@ -88,10 +115,7 @@ def tta_predict(model, image, do_flips):
     outputs : torch.tensor
         The average of model predictions, shape (B=1,C',H,W,D)
     """
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    else:
-        device = torch.device('cpu')
+    device = 'mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu'
     image = torch.transpose(image, 0,1)
     num_augments = image.shape[0]
     
@@ -150,3 +174,126 @@ def score(outputs,mask,metrics,metric_names, report_scores = False):
         if report_scores:
             print(f'Average {metric_names[metric_idx]} score across classes ... {avg_score:.4f}')
     return results
+
+def eval_model(prefix, valid_dupe_factor = 4, valid_batch_size = 1, chunking = True, flipping = True, save_results = False, print_status=False, filters = 16):
+    """
+    Compute evaluation scores for a trained model on both the validation and test sets
+    Parameters:
+    -----------
+    prefix : str
+        The model filename prefix
+    valid_dupe_factor : int
+        The number of times to duplicate the validation samples. Ignored if chunking = True
+    valid_batch_size : int
+        The batch size to use for validation samples.  Ignored if chunking = True
+    chunking : bool
+        Whether to use the chunking validation method
+    flipping : bool
+        Whether to flip axes randomly on chunks when using the chunking validation method.  Ignored if chunking = False
+    save_results : bool
+        Whether to save the score results as a file
+    print_status : bool
+        Whether to print the status
+    filters : int
+        Number of filters to use at the first stage of the UNet (should match what was used when training)
+    Returns:
+    --------
+    results : dict
+        Dictionary of scoring results
+    """
+    with open(prefix+'_split_info.pkl','rb') as f:
+        train_paths, valid_paths, test_paths = pickle.load(f)
+        
+    valid_dl = get_dl(
+        valid_paths, training = False,
+        batch_size = valid_batch_size, dupe_factor = valid_dupe_factor,
+        flipping = flipping, chunking = chunking,
+    )
+    
+    test_dl = get_dl(
+        test_paths, training = False,
+        batch_size = valid_batch_size, dupe_factor = valid_dupe_factor,
+        flipping = flipping, chunking = chunking,
+    )
+        
+    model = UNet(dim=3, out_channels = 3, init_features=filters, num_stages=4)
+    model.load_state_dict(torch.load(prefix+'_weights.pth'))
+    
+    dice = MultilabelF1Score(num_labels=3,average='none')
+    accelerator = Accelerator(mixed_precision = 'fp16')
+    model, valid_dl,test_dl, dice = accelerator.prepare(
+    model, valid_dl,test_dl, dice
+    )
+    set_seed()
+    results = {}
+    results['model'] = prefix
+    results['flipping'] = flipping
+    
+    model.eval()
+    with torch.no_grad():
+        if print_status: accelerator.print('Evaluating on test set...')
+        test_metrics, sample_test_metrics = evaluate_loop(
+            model, test_dl, [dice], ['dice'], return_sample_scores=True,save_extremes = True,
+            chunking = chunking, flipping = flipping
+        )
+        
+        if print_status: accelerator.print('Evaluating on validation set...')
+        valid_metrics, sample_valid_metrics = evaluate_loop(
+            model, valid_dl, [dice], ['dice'], return_sample_scores=True,save_extremes = True,
+            chunking = chunking, flipping = flipping,
+        )
+        for result in [sample_test_metrics, sample_valid_metrics]:
+            for sample in result:
+                for key in sample[1]:
+                    sample[1][key] = [float(sample[1][key].cpu().detach())]
+        for result in [test_metrics, valid_metrics]:
+            for key in result:
+                result[key] = [float(result[key].cpu().detach())]
+        results['validation'] = {
+            'set':valid_metrics,
+            'sample':sample_valid_metrics,
+        }
+        results['test'] = {
+            'set':test_metrics,
+            'sample':sample_test_metrics,
+        }
+        if print_status: accelerator.print('Done!')
+    if save_results:
+        filename = prefix+'_eval-results_flip.pkl' if flipping else prefix+'_eval-results.pkl'
+        with open(filename,'wb') as f:
+            pickle.dump(results,f) 
+    return results
+
+def sample_stats(results, dataset = 'validation', print_samples = False, print_stats = True):
+    """
+    Build dataframes of dataset summary statistics results and sample score results
+    Parameters:
+    -----------
+    results : dict
+        The dictionary of results output by eval_model
+    dataset : str
+        Which dataset to use.  Must be validation or test
+    print_samples : bool
+        Whether to print the sample score df
+    print_stats : bool
+        Whether the print the summary statistics df
+    """
+    sample_metrics = results[dataset]['sample']
+    sample_score_df = pd.concat([pd.DataFrame(sample[1],index=[sample[0]])\
+           for sample in sample_metrics]
+).sort_values(by='dice_avg',ascending=False)
+    stats_df = pd.DataFrame(data = {
+        'mean':sample_score_df.mean(),
+        'std dev':sample_score_df.std(),
+        '25th perc':sample_score_df.quantile(q=0.25),
+        '75th perc':sample_score_df.quantile(q=0.75),
+    })
+    if print_samples:
+        print(f'{dataset} sample scores for {results["model"]}')
+        print(f'flipping is {results["flipping"]}')
+        print(sample_score_df)
+    if print_stats:
+        print(f'{dataset} score stats for {results["model"]}')
+        print(f'flipping is {results["flipping"]}')
+        print(stats_df)
+    return sample_score_df, stats_df

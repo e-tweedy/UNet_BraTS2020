@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split
 from skimage.transform import rescale
 import random
 from skimage.util import random_noise
+import pdb
 
 def get_mask(prefix):
     """
@@ -84,29 +85,32 @@ def get_crop_slice(target_size,width,method = 'symmetric'):
     else:
         return slice(0,width)
 
-def get_pad_widths(width,target_width = None):
+def get_pad_widths(width,factor = 16,target_width = None):
     """
     Generate tuple of padding widths for padding an axis
      Will pad roughly evenly on either end of the axis
     Parameters:
     -----------
-    target_length : int of None
+    factor : int
+        if target_width is None, then the axis
+        will be padded up to the next multiple of factor 
+    target_width : int or None
         the desired length of the padded axis
-        if target_length < length, will return (0,0)
-        if target_length is None, will pad the length
-        upto the next multiple of 16
-    length : int
-        the current length of the axis
+        if target_width < width, will return (0,0)
+        if target_width is None, will pad the length
+        upto the next multiple of factor
+    width : int
+        the current width of the axis
     Returns:
     --------
     (left,right) : (int,int)
         the number of pixels on each end of the axis
     """
     if target_width is None:
-        if width % 16 == 0:
+        if width % factor == 0:
             return (0,0)
         else:
-            target_width = 16*(width//16+1)
+            target_width = factor*(width//factor+1)
     
     if width >= target_width:
             return (0,0)
@@ -250,11 +254,11 @@ def crop_to_size(image,mask=None,target_shape=(128,128,128),method='symmetric'):
         return image, mask
     return image
     
-def pad_to_size(image,mask=None,target_shape=None):
+def pad_to_size(image,mask=None,target_shape=None, factor = 16):
     """
     Pad the image (and optionally a mask)
     to a target shape if provided, or so that each
-    axis is a multiple of 16
+    axis is a multiple of factor
     Padding will be roughly half on each end of each axis
     Parameters:
     -----------
@@ -264,15 +268,17 @@ def pad_to_size(image,mask=None,target_shape=None):
         the optional mask to also be padded
     target_shape : tuple(int)
         the desired shape of the spatial axes
+    factor : int
+        padded image dimensions will be a multiple of factor
     Returns:
     --------
     image, mask (if provided) : numpy.array
         the padded image and mask (if provided)
     """
     if target_shape is None:
-        pads = [get_pad_widths(width) for width in image.shape[1:]]
+        pads = [get_pad_widths(width, factor = factor) for width in image.shape[1:]]
     else:
-        pads = [get_pad_widths(width,target_shape[i]) for i,width in enumerate(image.shape[1:])]
+        pads = [get_pad_widths(width,target_width=target_shape[i]) for i,width in enumerate(image.shape[1:])]
     image = np.pad(image,[(0,0)]+pads)
     if mask is not None:
         if len(mask.shape) == 4:
@@ -333,4 +339,91 @@ def decode_mask(mask):
     mask[np.logical_and(tc==1,et==0)] = 1
     mask[np.logical_and(wt==1,tc==0)] = 2
     return mask
+
+def array_slice(a, axis, start, end, step=1):
+    """
+    Slice an array along a dynamically defined dimension
+    Parameters:
+    -----------
+    a : np.array
+        The array to slice
+    axis : int
+        The dimension of a that should be sliced
+    start, end, step : int, int, int
+        The indices in range(start,end,step) will be sliced
+    Returns:
+    --------
+    a[:,...,range(start,end,step),...,:] : np.array
+    where the slicing occurs in dimension specified by axis
+    """
+    return a[(slice(None),) * (axis % a.ndim) + (slice(start, end, step),)]
+
+def chunk_axis(a, axis, chunk_width = 128):
+    """
+    Chunk an array of shape (B,C,L,W,D) into two overlapping pieces of width chunk_width
+    along one of the spatial axes (L,W,D) and concatenate on the batch axis
+    a : np.array
+        An array of shape (B,C,L,W,D)
+    axis : int
+        Must be 3,4, or 5
+    chunk_width : int
+        The width of the chunks into which the axis should be split.
+        Note that the length of axis must be less than 2*chunk_width
+    Returns:
+    --------
+    The chunked array of shape (2B,C,...)
+    
+    The length of the overlap between the two chunks, which is an integer
+    and equal to 2*chunkwidth-(length of axis)
+    """
+    length = a.shape[axis]
+    overlap = 2*chunk_width-length
+    a1 = array_slice(a,axis,0,chunk_width)
+    a2 = array_slice(a,axis,length-chunk_width,length)
+    return np.concatenate((a1,a2)), overlap
+        
+def unchunk_axis(a, axis, overlap):
+    """
+    Undo the operation performed by chunk_axis.
+    Will be used inside a training/evaluation loop
+    on torch tensors
+    """
+    length = a.shape[0]
+    a1, a2 = a[:int(length/2)], a[int(length/2):]
+    left, o1 = array_slice(a1,axis,0,128-overlap),array_slice(a1,axis,128-overlap,128)
+    o2,right = array_slice(a2,axis,0,overlap),array_slice(a2,axis,overlap,128)
+    o = (o1+o2)/2
+    return torch.concat((left,o,right),dim=axis)
+
+def chunk_image(a, chunk_width = 128):
+    """
+    Iteratively chunk all spatial axes of an array of shape (B,C,L,W,D),
+    starting at the end.
+    Parameters:
+    -----------
+    a : np.array
+        Array of shape (B,C,L,W,D)
+    chunk_width : int
+        The width of the resulting chunks.  All of L,W,D must be less than 2*chunk_width
+    Returns:
+    --------
+    The chunked array of shape (8B, C, chunk_width, chunk_width, chunk_width)
+    
+    A list 
+    """
+    overlaps = []
+    a_chunked = a[None]
+    for axis in range(-1,-4,-1):
+        a_chunked, overlap = chunk_axis(a_chunked,axis, chunk_width = chunk_width)
+        overlaps.append(overlap)
+    return a_chunked, overlaps
+
+def unchunk_image(a,overlaps):
+    """
+    Undo the operation done by chunk_image
+    """
+    for axis in range(-3,0,1):
+        overlap = overlaps.pop()
+        a = unchunk_axis(a,axis,overlap)
+    return a
     

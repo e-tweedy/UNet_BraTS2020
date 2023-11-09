@@ -73,9 +73,9 @@ def animate_sample(image, mask, pred_mask = None, im_cmap = 'gray', seg_cmap = '
         frame = []
         for j in range(3):
             frame.append(axs[j].imshow(image[j,:,:,i],cmap=im_cmap))
-        frame.append(axs[3].imshow(mask[:,:,i],cmap=seg_cmap))
+        frame.append(axs[3].imshow(mask[:,:,i],cmap=seg_cmap, vmin=0, vmax=3))
         if pred_mask is not None:
-            frame.append(axs[4].imshow(pred_mask[:,:,i],cmap=seg_cmap))
+            frame.append(axs[4].imshow(pred_mask[:,:,i],cmap=seg_cmap, vmin=0, vmax=3))
         frames.append(frame)
     axs[0].set_title('T1CE image')
     axs[1].set_title('T2 image')

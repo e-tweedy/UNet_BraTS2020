@@ -80,6 +80,11 @@ class UNet(nn.Module):
         The desired dimension - must be 2 or 3
         Use 2 if inputs will have shape (batch_size,channel_num,H,W)
         and use 3 if (batch_size,channel_num,H,W,D)
+    features : list(int)
+        List of number of output features in the encoder convolution blocks
+        If features is not None:
+        - init_features will be ignored
+        - num_stages will be reset to len(features)
     init_features : int
         The number of output features in the first
         encoder convolution block.
@@ -94,11 +99,15 @@ class UNet(nn.Module):
         up-convolution blocks.
     """
     def __init__(
-        self, in_channels = 3, out_channels = 3, dim = 2, init_features = 64, num_stages = 4,
+        self, in_channels = 3, out_channels = 3, dim = 2, features = None, init_features = 64, num_stages = 4,
     ):
         super().__init__()
         # Set up feature counts for encoder/decoder blocks
-        self.features = [init_features*2**k for k in range(num_stages)]
+        if features is not None:
+            num_stages = len(features)
+            self.features = features
+        else:
+            self.features = [init_features*2**k for k in range(num_stages)]
         # Set up layer lists
         self.enc_layers = nn.ModuleList()
         self.dec_layers = nn.ModuleList()
@@ -143,10 +152,13 @@ class UNet(nn.Module):
         for idx in range(0,len(self.dec_layers),2):
             x = self.dec_layers[idx](x)
             skip_connection = skip_connections[idx//2]
-
             # Resize before skip_connection before concatenation if necessary
             if x.shape != skip_connection.shape:
-                skip_connection = center_crop(skip_connection,x.shape[2])
+                _,_,h,w,d = x.shape
+                print(f'x shape is {x.shape}')
+                print(f'skip connection shape is {skip_connection.shape}')
+                skip_connection = skip_connection[:,:,:h-1,:w-1,:d-1]
+                print(f'cropped skip connection shape is {skip_connection.shape}')
 
             concat_skip = torch.cat((skip_connection,x),dim=1)
             # Pass through the up-convolution layer that follows

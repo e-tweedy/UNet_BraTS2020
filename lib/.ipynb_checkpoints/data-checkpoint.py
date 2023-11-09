@@ -1,8 +1,8 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import random
-from lib.image_utils import crop_to_size, pad_to_size, randomly_add_noise, random_flips
+from lib.image_utils import *
 
 class MRIDataset(Dataset):
     """
@@ -13,22 +13,22 @@ class MRIDataset(Dataset):
         List of paths prefixes for files
     training : bool
         Whether this is a training dataset (as opposed to validation or testing)
-    train_dupe_factor : int
-        How many augmentation samples to produce for each training sample
-    valid_dupe_factor : int
+    dupe_factor : int
+        How many augmentation samples to produce for each training sample if training, or else
         How many test-time-augmentation samples to produce for each validation/testing sample
     noise_prob : float
         probability that an augmented sample received random Gaussian noise
     """
-    def __init__(self,paths, training = True, train_dupe_factor = 4, valid_dupe_factor = 4, noise_prob = 0.5, random_seed = 42):
+    def __init__(self,paths, training = True, dupe_factor = 4, noise_prob = 0.5, flipping = True,chunking = True, random_seed = 42):
         self.inputs_dtype = torch.float32
         self.targets_dtype = torch.long
         self.paths = paths
         self.training = training
-        self.train_dupe_factor = train_dupe_factor
-        self.valid_dupe_factor = valid_dupe_factor
+        self.dupe_factor = dupe_factor
         self.noise_prob = noise_prob
         self.random_seed = random_seed
+        self.chunking = chunking
+        self.flipping = flipping
         
     def __len__(self):
         """
@@ -38,7 +38,7 @@ class MRIDataset(Dataset):
         and so only one dataset item is produced per sample
         """
         if self.training:
-            return self.train_dupe_factor*len(self.paths)
+            return self.dupe_factor*len(self.paths)
         else:
             return len(self.paths)
 
@@ -76,25 +76,52 @@ class MRIDataset(Dataset):
             image,mask,_ = random_flips(image,mask)
         
         else:
-            image_augs, mask_augs, do_flips = [],[],[]
-            for i in range(self.valid_dupe_factor):
-                # Randomly add Gaussian noise and flips
-                image_aug = randomly_add_noise(image,prob = self.noise_prob)
-                image_aug, mask_aug, do_flips_aug = random_flips(image_aug, mask)
-                image_augs.append(image_aug)
-                mask_augs.append(mask_aug)
-                do_flips.append(do_flips_aug)
+            if self.chunking:
+                im_shape = image.shape[1:]
+                if min(im_shape)<128:
+                    im_shape = [max(l,128) for l in im_shape]
+                    image, mask = pad_to_size(image,mask,target_shape = im_shape)
+                image, overlaps = chunk_image(image)
+                if self.flipping:
+                    do_flips = []
+                    for idx in range(image.shape[0]):
+                        flipped_chunk, do_flips_chunk = random_flips(image[idx])
+                        image[idx] = flipped_chunk
+                        do_flips.append(do_flips_chunk)
             
-            # Stack augmentations into one image of shape
-            # (self.valid_dupe_factor,3,H,W,D)
-            image = np.stack(image_augs,axis=0)
+            else:
+                image_augs, mask_augs, do_flips = [],[],[]
+                for i in range(self.dupe_factor):
+                    # Randomly add Gaussian noise and flips
+                    image_aug = randomly_add_noise(image,prob = self.noise_prob)
+                    image_aug, mask_aug, do_flips_aug = random_flips(image_aug, mask)
+                    image_augs.append(image_aug)
+                    mask_augs.append(mask_aug)
+                    do_flips.append(do_flips_aug)
+            
+                # Stack augmentations into one image of shape
+                # (self.dupe_factor,3,H,W,D)
+                image = np.stack(image_augs,axis=0)
         
         image = torch.from_numpy(image).type(self.inputs_dtype)
         mask = torch.from_numpy(mask).type(self.targets_dtype)
         if self.training:
             return image, mask
         
-        # If validation or testing set, we need the do_flips information
-        # in order to un-flip predictions before averaging them
+        # If validation or testing set, we need the do_flips/chunking overlap information
+        # in order to un-flip/unchunk predictions
         else:
-            return self.paths[index], image, mask, do_flips
+            if self.chunking:
+                if self.flipping: return image, mask, (do_flips, overlaps), self.paths[index]
+                else: return image, mask, overlaps, self.paths[index]
+            else:
+                return image, mask, do_flips, self.paths[index]
+        
+def get_dl(paths, training = True, batch_size = 1, dupe_factor = 1, noise_prob = 0.8, chunking = True, flipping = True):
+    ds = MRIDataset(
+        paths, training, dupe_factor = dupe_factor, noise_prob = noise_prob, chunking = chunking, flipping = flipping,
+    )
+    dl = torch.utils.data.DataLoader(
+        ds, batch_size=batch_size, shuffle=True
+    )
+    return dl
