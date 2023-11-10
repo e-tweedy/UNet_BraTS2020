@@ -4,6 +4,7 @@ import pickle
 from lib.image_utils import unchunk_image
 from lib.data import get_dl
 from lib.unet import UNet
+from lib.train import set_seed
 from torchmetrics.classification import MultilabelF1Score
 from accelerate import Accelerator
 import pandas as pd
@@ -74,7 +75,6 @@ def evaluate_loop(model, dl, metrics, metric_names, return_sample_scores = False
                 outputs = torch.squeeze(outputs).cpu().detach().numpy()
                 sample_to_save = (mask, outputs)
                 prefix = 'test_sample_extreme'
-                if chunking: prefix+='_chunk'
                 with open(prefix+'/'+path.split('.')[0]+'.pkl','wb') as f:
                     pickle.dump(sample_to_save,f)
     scores = {}

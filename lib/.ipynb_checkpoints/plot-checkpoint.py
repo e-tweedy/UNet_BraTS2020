@@ -90,3 +90,33 @@ def animate_sample(image, mask, pred_mask = None, im_cmap = 'gray', seg_cmap = '
     plt.colorbar(sm, ticks=np.linspace(0,3,4),orientation='horizontal')
     plt.close()
     return ani
+
+def plot_training_curve(prefix = None, num_training_epochs, train_loss = None, val_loss = None, save_fig = False):
+    """
+    Retrieve loss logs and plot the training curve
+    Parameters:
+    -----------
+    prefix : str
+        The model file prefix.  If train_loss and val_loss are not provided,
+        will use this prefix to retrieve those logs from model results pkl file
+    num_training_epochs : int
+        The number of epochs the model was trained for
+    save_fig : bool
+        Whether to save the figure
+    train_loss : list
+        Training loss values, optional
+    val_loss : list
+        Validation loss values, optional
+    """
+    if train_loss is None or val_loss is None:
+        with open(prefix+'_results.pkl','rb') as f:
+            _, train_loss, val_loss = pickle.load(f)
+    plt.plot(range(num_training_epochs),train_loss, color='b', label='Training loss')
+    plt.plot(range(num_training_epochs),val_loss, color='r', label='Validation loss')
+    plt.xlabel("epoch")
+    plt.ylabel("loss")
+    plt.title(f"Training curves over {num_training_epochs} epochs")
+    plt.legend()
+    if save_fig:
+        plt.savefig(prefix+'_training_curve.png')
+    plt.show()
